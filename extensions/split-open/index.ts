@@ -41,17 +41,17 @@ function stripMatchingQuotes(value: string): string {
 }
 
 export default function (pi: ExtensionAPI): void {
-	pi.registerCommand("open", {
-		description: "Open a file in $VISUAL/$EDITOR inside a right-hand Ghostty split. Usage: /open <file>",
+	pi.registerCommand("split-open", {
+		description: "Open a file in $VISUAL/$EDITOR inside a right-hand Ghostty split. Usage: /split-open <file>",
 		handler: async (args, ctx) => {
 			if (process.platform !== "darwin") {
-				ctx.ui.notify("/open currently requires macOS (Ghostty AppleScript).", "warning");
+				ctx.ui.notify("/split-open currently requires macOS (Ghostty AppleScript).", "warning");
 				return;
 			}
 
 			const rawFile = stripMatchingQuotes(args.trim()).replace(/^@/, "");
 			if (!rawFile) {
-				ctx.ui.notify("Usage: /open <file>", "warning");
+				ctx.ui.notify("Usage: /split-open <file>", "warning");
 				return;
 			}
 

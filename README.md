@@ -8,7 +8,7 @@ Package for the LLM coding agent: extensions, subagents, skills, prompts, templa
   - `/review` and `/end-review` for code-review workflows.
   - `/session-breakdown` for interactive usage analytics from `~/.pi/agent/sessions`.
   - `/split-fork` for forking the current session into a new [Ghostty](https://ghostty.org/) split.
-  - `/open` for opening files in `$VISUAL`/`$EDITOR` inside a [Ghostty](https://ghostty.org/) split.
+  - `/split-open` for opening files in `$VISUAL`/`$EDITOR` inside a [Ghostty](https://ghostty.org/) split.
   - `/bookmark` and `/unbookmark` for labelling useful assistant messages.
   - `/momap` and `ctrl+0` through `ctrl+9` for quick model switching.
   - `/plan`, `/todos`, and `ctrl+alt+p` for read-only planning mode.
@@ -51,7 +51,7 @@ Package for the LLM coding agent: extensions, subagents, skills, prompts, templa
 
 - `pi` with package support.
 - Bun/Node tooling for development.
-- macOS + Ghostty for `/open` and `/split-fork`.
+- macOS + Ghostty for `/split-open` and `/split-fork`.
 - GitHub CLI (`gh`) for `/review pr ...` workflows.
 
 ## Extension quick reference
@@ -83,11 +83,11 @@ Shows sessions, messages, tokens, and cost for the last 7/30/90 days. Use arrow 
 ### Ghostty helpers
 
 ```text
-/open path/to/file
+/split-open path/to/file
 /split-fork optional prompt
 ```
 
-Both commands require macOS and Ghostty. `/open` launches `$VISUAL`, `$EDITOR`, or `nvim`. `/split-fork` copies the current session branch into a new pi process in a right-hand Ghostty split.
+Both commands require macOS and Ghostty. `/split-open` launches `$VISUAL`, `$EDITOR`, or `nvim`. `/split-fork` copies the current session branch into a new pi process in a right-hand Ghostty split.
 
 ### Model mapping
 
