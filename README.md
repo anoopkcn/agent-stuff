@@ -1,6 +1,6 @@
 # agent-stuff
 
-Package for the [pi coding agent](https://pi.dev): extensions, subagents, skills, prompt templates, and a theme.
+Package for the [pi coding agent](https://pi.dev): extensions, subagents, skills, prompts, templates, and a theme.
 
 ## What is included
 
