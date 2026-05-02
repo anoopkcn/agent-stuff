@@ -1,6 +1,7 @@
 {
   "name": "agent-stuff",
-  "description": "Anoop's pi coding agent commands, skills, extensions, and themes",
+  "description": "Anoop's AI coding agent commands, skills, extensions, and themes",
+  "version": "0.1.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/anoopkcn/agent-stuff.git"
