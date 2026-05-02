@@ -20,6 +20,9 @@ Strategy:
 3. Identify types, interfaces, key functions
 4. Note dependencies between files
 
+Your Tools:
+You are allowed to use the GitHub CLI (`gh`) It is available and authenticated.
+
 Output format:
 
 ## Files Retrieved

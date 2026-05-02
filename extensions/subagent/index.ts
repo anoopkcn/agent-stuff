@@ -27,6 +27,13 @@ import { type AgentConfig, type AgentScope, discoverAgents } from "./agents.js";
 const MAX_PARALLEL_TASKS = 8;
 const MAX_CONCURRENCY = 4;
 const COLLAPSED_ITEM_COUNT = 10;
+const SUBAGENT_DESCRIPTION_PREVIEW_LENGTH = 120;
+
+function truncateText(text: string, maxLength: number): string {
+	if (text.length <= maxLength) return text;
+	if (maxLength <= 3) return text.slice(0, maxLength);
+	return `${text.slice(0, maxLength - 3).trimEnd()}...`;
+}
 
 function formatTokens(count: number): string {
 	if (count < 1000) return count.toString();
@@ -1006,14 +1013,13 @@ export default function (pi: ExtensionAPI) {
 				return;
 			}
 
-			// Build display strings; keep a parallel array so we can look up by index without string-parsing
+			// Build display strings; keep a parallel array so we can look up by index without string-parsing.
+			// Format as aligned name + description, with descriptions capped for a compact list.
+			const nameWidth = Math.max(...agents.map((a) => a.name.length));
 			const items = agents.map((a) => {
-				let line = `${a.name} (${a.source}) — ${a.description || "(no description)"}`;
-				const extras: string[] = [];
-				if (a.model) extras.push(`model: ${a.model}`);
-				if (a.tools && a.tools.length > 0) extras.push(`tools: ${a.tools.join(", ")}`);
-				if (extras.length > 0) line += ` [${extras.join(" | ")}]`;
-				return line;
+				const name = a.name.padEnd(nameWidth);
+				const description = truncateText(a.description || "(no description)", SUBAGENT_DESCRIPTION_PREVIEW_LENGTH);
+				return `${name}  ${description}`;
 			});
 
 			const selected = await ctx.ui.select(`Subagents (${agents.length}, scope: ${scope})`, items);
