@@ -1,0 +1,37 @@
+{
+  "name": "agent-stuff",
+  "description": "Anoop's pi coding agent commands, skills, extensions, and themes",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/anoopkcn/agent-stuff.git"
+  },
+  "readme": "README.md",
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "pi-skill",
+    "pi-theme"
+  ],
+  "pi": {
+    "extensions": [
+      "./extensions"
+    ],
+    "skills": [
+      "./skills"
+    ],
+    "themes": [
+      "./themes"
+    ],
+    "prompts": [
+      "./prompts"
+    ]
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "@mariozechner/pi-coding-agent": "*",
+    "@mariozechner/pi-ai": "*",
+    "@mariozechner/pi-tui": "*"
+  }
+}

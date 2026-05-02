@@ -51,3 +51,4 @@ test-results/
 
 # Misc
 *.local
+*.lock

@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "node",
+    "baseUrl": ".",
+    "paths": {
+      "@mariozechner/pi-coding-agent": [
+        "/opt/homebrew/lib/node_modules/@mariozechner/pi-coding-agent"
+      ]
+    },
+    "skipLibCheck": true
+  }
+}
