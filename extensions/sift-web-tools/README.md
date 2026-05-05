@@ -50,8 +50,8 @@ export SIFT_SEARXNG_URL="https://your-searxng.example/search" # Replace the URL 
 
 Errors are surfaced via `isError: true` and include sift's exit code context:
 
-- `transport error: …` — exit 3 from sift (curl failed, HTTP 4xx/5xx, response > 50 MB).
+- `transport error: ...` — exit 3 from sift (curl failed, HTTP 4xx/5xx, response > 50 MB).
 - `page requires JavaScript (SPA) — sift cannot render it` — exit 4. sift has no JS engine; report and move on rather than retrying.
-- `unsupported content type: …` — exit 6 (e.g. PDF without `pdftotext` installed).
-- `sift returned invalid JSON …` — sift emitted non-JSON in `--json` mode; the message includes a sample of the actual output for debugging.
-- `sift binary not found …` — install sift or set `SIFT_BIN`.
+- `unsupported content type: ...` — exit 6 (e.g. PDF without `pdftotext` installed).
+- `sift returned invalid JSON ...` — sift emitted non-JSON in `--json` mode; the message includes a sample of the actual output for debugging.
+- `sift binary not found ...` — install sift or set `SIFT_BIN`.
