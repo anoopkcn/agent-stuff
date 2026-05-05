@@ -285,8 +285,117 @@ function violationMessage(commandName: string): string {
 	return `Direct Python tooling is blocked: ${commandName}\n\nUse uv instead. Examples:\n- uv run python ...\n- uv run pytest ...\n- uv run ruff ...\n- uv add <package>\n- uv sync\n- uv pip ... (only when explicitly appropriate)`;
 }
 
+function findMatchingParen(command: string, start: number): number {
+	let depth = 1;
+	let quote: "'" | '"' | "`" | undefined;
+	let escaped = false;
+
+	for (let i = start; i < command.length; i++) {
+		const char = command[i];
+
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+
+		if (char === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+
+		if (quote) {
+			if (char === quote) quote = undefined;
+			continue;
+		}
+
+		if (char === "'" || char === '"' || char === "`") {
+			quote = char;
+			continue;
+		}
+
+		if (char === "(") depth++;
+		if (char === ")") {
+			depth--;
+			if (depth === 0) return i;
+		}
+	}
+
+	return -1;
+}
+
+function commandSubstitutions(command: string): string[] {
+	const substitutions: string[] = [];
+	let quote: "'" | '"' | "`" | undefined;
+	let escaped = false;
+	let backtickStart = -1;
+
+	for (let i = 0; i < command.length; i++) {
+		const char = command[i];
+
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+
+		if (char === "\\" && quote !== "'") {
+			escaped = true;
+			continue;
+		}
+
+		if (quote === "`") {
+			if (char === "`") {
+				substitutions.push(command.slice(backtickStart + 1, i));
+				quote = undefined;
+				backtickStart = -1;
+			}
+			continue;
+		}
+
+		if (quote && quote !== '"') {
+			if (char === quote) quote = undefined;
+			continue;
+		}
+
+		if (quote === '"' && char === '"') {
+			quote = undefined;
+			continue;
+		}
+
+		if (!quote && char === "'") {
+			quote = char;
+			continue;
+		}
+
+		if (!quote && char === '"') {
+			quote = char;
+			continue;
+		}
+
+		if (char === "`") {
+			quote = "`";
+			backtickStart = i;
+			continue;
+		}
+
+		if (char === "$" && command[i + 1] === "(") {
+			const end = findMatchingParen(command, i + 2);
+			if (end >= 0) {
+				substitutions.push(command.slice(i + 2, end));
+				i = end;
+			}
+		}
+	}
+
+	return substitutions;
+}
+
 export function inspectCommandForUvPolicy(command: string, depth = 0): UvPolicyViolation | undefined {
 	if (depth > 3) return undefined;
+
+	for (const substitution of commandSubstitutions(command)) {
+		const substitutionViolation = inspectCommandForUvPolicy(substitution, depth + 1);
+		if (substitutionViolation) return substitutionViolation;
+	}
 
 	for (const simpleCommand of parseSimpleCommands(command)) {
 		if (uvCommandIsAllowed(simpleCommand.tokens)) continue;
