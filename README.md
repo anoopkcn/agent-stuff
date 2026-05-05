@@ -12,6 +12,7 @@ Package for the LLM coding agent: extensions, subagents, skills, prompts, templa
   - `/bookmark` and `/unbookmark` for labelling useful assistant messages.
   - `/momap` and `ctrl+0` through `ctrl+9` for quick model switching.
   - `/plan`, `/todos`, and `ctrl+alt+p` for read-only planning mode.
+  - `uv` guard that blocks direct Python tooling and requires uv-backed commands.
   - `subagent` tool plus `/subagents` for isolated specialist-agent delegation.
 - **Subagents** in `agents/`
   - `scout` gathers compressed codebase context.
@@ -113,6 +114,12 @@ pi --plan
 ```
 
 Plan mode restricts the agent to read-only exploration tools, asks it to produce a numbered plan, then can execute the plan while tracking `[DONE:n]` markers.
+
+### uv Python guard
+
+The `uv` extension blocks direct Python tooling in pi bash execution. Use `uv run python ...`, `uv run pytest ...`, `uv add ...`, and `uv sync` instead of invoking `python`, `pip`, `pytest`, `poetry`, or virtualenv tooling directly.
+
+Use `/uv` to show the active policy.
 
 ### Subagents
 
