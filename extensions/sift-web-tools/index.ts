@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, open, stat } from "node:fs/promises";
+import { chmod, mkdir, open, readdir, stat, unlink } from "node:fs/promises";
 import { basename, extname, join, parse } from "node:path";
 import { formatSize, keyHint, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { StringEnum } from "@mariozechner/pi-ai";
@@ -50,6 +50,29 @@ const WebSaveParams = Type.Object({
 	force: Type.Optional(Type.Boolean({ default: false, description: "Overwrite the selected output file if it exists." })),
 });
 
+const WebArtifactsParams = Type.Object({
+	limit: Type.Optional(
+		Type.Integer({
+			minimum: 1,
+			maximum: 200,
+			default: 50,
+			description: "Maximum number of artifacts to list (newest first).",
+		}),
+	),
+});
+
+const WebCleanParams = Type.Object({
+	older_than_minutes: Type.Optional(
+		Type.Integer({
+			minimum: 0,
+			default: 1440,
+			description: "Delete artifacts older than this many minutes. Ignored when all=true.",
+		}),
+	),
+	all: Type.Optional(Type.Boolean({ default: false, description: "Delete all artifacts in /tmp/sift-web-tools/." })),
+	dry_run: Type.Optional(Type.Boolean({ default: false, description: "List matching artifacts without deleting them." })),
+});
+
 interface SearchDetails {
 	query: string;
 	length: number;
@@ -76,6 +99,29 @@ interface SaveDetails {
 	source: "sift";
 	artifact_dir: string;
 	kind?: string;
+}
+
+interface ArtifactInfo {
+	name: string;
+	path: string;
+	size: number;
+	modified: number;
+	kind: string;
+}
+
+interface ArtifactsDetails {
+	artifact_dir: string;
+	total: number;
+	returned: number;
+	files: ArtifactInfo[];
+}
+
+interface CleanDetails {
+	artifact_dir: string;
+	matched: number;
+	deleted: number;
+	dry_run: boolean;
+	files: ArtifactInfo[];
 }
 
 interface SiftSearchJson {
@@ -257,6 +303,42 @@ async function detectSavedKind(path: string): Promise<string> {
 	if (TEXT_EXTENSIONS.has(ext)) return ext.slice(1);
 	if (ext === ".bin") return "binary";
 	return ext ? ext.slice(1) : "unknown";
+}
+
+async function listArtifacts(): Promise<ArtifactInfo[]> {
+	try {
+		const entries = await readdir(ARTIFACT_DIR, { withFileTypes: true });
+		const files = await Promise.all(
+			entries
+				.filter((entry) => entry.isFile())
+				.map(async (entry) => {
+					const path = join(ARTIFACT_DIR, entry.name);
+					const info = await stat(path);
+					return {
+						name: entry.name,
+						path,
+						size: info.size,
+						modified: info.mtimeMs,
+						kind: await detectSavedKind(path).catch(() => "unknown"),
+					} satisfies ArtifactInfo;
+				}),
+		);
+		return files.sort((a, b) => b.modified - a.modified);
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return [];
+		throw err;
+	}
+}
+
+function formatArtifactLine(file: ArtifactInfo, index: number): string {
+	return `${index + 1}. ${file.path}\n   ${formatSize(file.size)} · ${file.kind} · modified ${new Date(file.modified).toISOString()}`;
+}
+
+function formatArtifactsList(files: ArtifactInfo[], total: number): string {
+	if (!files.length) return `(no artifacts in ${ARTIFACT_DIR})`;
+	const text = files.map(formatArtifactLine).join("\n\n");
+	const remaining = total - files.length;
+	return remaining > 0 ? `${text}\n\n[${remaining} more artifact(s); increase limit to show more.]` : text;
 }
 
 type ThemeLike = { fg(name: string, text: string): string };
@@ -573,6 +655,143 @@ export default function (pi: ExtensionAPI) {
 
 			if (!isError && details?.path) {
 				const meta = `${details.path} · ${formatSize(details.size)} · ${details.mode}`;
+				return new Text(`${theme.fg("success", "✓")} ${theme.fg("toolOutput", meta)}`, 0, 0);
+			}
+			return renderCollapsed(text, isError, theme);
+		},
+	});
+
+	pi.registerTool({
+		name: "web_artifacts",
+		label: "Web artifacts",
+		description: "List files saved by web_save under /tmp/sift-web-tools/ so the agent can inspect them with read, grep, or bash.",
+		promptSnippet: "web_artifacts() — list files saved under /tmp/sift-web-tools/.",
+		promptGuidelines: [
+			"Use web_artifacts to rediscover local paths created by web_save.",
+			"After web_artifacts returns a path, use read with offset/limit, grep, or bash to inspect relevant parts.",
+		],
+		parameters: WebArtifactsParams,
+
+		async execute(_toolCallId, params: Static<typeof WebArtifactsParams>) {
+			const limit = params.limit ?? 50;
+			const files = await listArtifacts();
+			const returned = files.slice(0, limit);
+			return {
+				content: [{ type: "text", text: formatArtifactsList(returned, files.length) }],
+				details: {
+					artifact_dir: ARTIFACT_DIR,
+					total: files.length,
+					returned: returned.length,
+					files: returned,
+				} satisfies ArtifactsDetails,
+			};
+		},
+
+		renderCall(args, theme, _context) {
+			const limit = typeof args.limit === "number" ? args.limit : 50;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("web_artifacts ")) + theme.fg("muted", `[limit=${limit}]`),
+				0,
+				0,
+			);
+		},
+
+		renderResult(result, { expanded }, theme, context) {
+			const block = result.content[0];
+			const text = block?.type === "text" ? block.text : "(no output)";
+			const details = result.details as ArtifactsDetails | undefined;
+			const isError = context.isError;
+
+			if (expanded) {
+				const container = new Container();
+				container.addChild(new Text(isError ? theme.fg("error", "✗ web_artifacts") : theme.fg("success", "✓ web_artifacts"), 0, 0));
+				container.addChild(new Text(theme.fg("muted", ARTIFACT_DIR), 0, 0));
+				container.addChild(new Text(text, 0, 0));
+				if (details && !isError) {
+					container.addChild(new Text(theme.fg("dim", `${details.returned}/${details.total} artifact(s)`), 0, 0));
+				}
+				return container;
+			}
+
+			if (!isError && details) {
+				return new Text(`${theme.fg("success", "✓")} ${theme.fg("toolOutput", `${details.total} artifact(s) in ${ARTIFACT_DIR}`)}`, 0, 0);
+			}
+			return renderCollapsed(text, isError, theme);
+		},
+	});
+
+	pi.registerTool({
+		name: "web_clean",
+		label: "Web clean",
+		description: "Delete old files saved by web_save under /tmp/sift-web-tools/. By default deletes artifacts older than 1440 minutes; use all=true to delete everything.",
+		promptSnippet: "web_clean(older_than_minutes?, all?, dry_run?) — delete old saved web artifacts from /tmp/sift-web-tools/.",
+		promptGuidelines: [
+			"Use web_clean to remove stale files created by web_save after they are no longer needed.",
+			"Use web_clean dry_run=true before deleting artifacts if you need to confirm which files match.",
+		],
+		parameters: WebCleanParams,
+		executionMode: "sequential",
+
+		async execute(_toolCallId, params: Static<typeof WebCleanParams>) {
+			const all = params.all ?? false;
+			const dryRun = params.dry_run ?? false;
+			const olderThanMinutes = params.older_than_minutes ?? 1440;
+			const cutoff = Date.now() - olderThanMinutes * 60 * 1000;
+			const files = await listArtifacts();
+			const matched = files.filter((file) => all || file.modified < cutoff);
+
+			if (!dryRun) {
+				await Promise.all(matched.map((file) => unlink(file.path).catch(() => undefined)));
+			}
+
+			const action = dryRun ? "Would delete" : "Deleted";
+			const scope = all ? "all artifacts" : `artifacts older than ${olderThanMinutes} minute(s)`;
+			const shown = matched.slice(0, 50);
+			const list = matched.length ? `\n\n${formatArtifactsList(shown, matched.length)}` : "";
+			return {
+				content: [{ type: "text", text: `${action} ${matched.length} ${scope} from ${ARTIFACT_DIR}.${list}` }],
+				details: {
+					artifact_dir: ARTIFACT_DIR,
+					matched: matched.length,
+					deleted: dryRun ? 0 : matched.length,
+					dry_run: dryRun,
+					files: matched,
+				} satisfies CleanDetails,
+			};
+		},
+
+		renderCall(args, theme, _context) {
+			const all = args.all === true;
+			const dryRun = args.dry_run === true;
+			const age = typeof args.older_than_minutes === "number" ? args.older_than_minutes : 1440;
+			const label = all ? "all" : `>${age}m`;
+			return new Text(
+				theme.fg("toolTitle", theme.bold("web_clean ")) +
+					theme.fg("muted", `[${label}${dryRun ? ", dry-run" : ""}]`),
+				0,
+				0,
+			);
+		},
+
+		renderResult(result, { expanded }, theme, context) {
+			const block = result.content[0];
+			const text = block?.type === "text" ? block.text : "(no output)";
+			const details = result.details as CleanDetails | undefined;
+			const isError = context.isError;
+
+			if (expanded) {
+				const container = new Container();
+				container.addChild(new Text(isError ? theme.fg("error", "✗ web_clean") : theme.fg("success", "✓ web_clean"), 0, 0));
+				container.addChild(new Text(text, 0, 0));
+				if (details && !isError) {
+					const meta = details.dry_run ? `${details.matched} matched · dry run` : `${details.deleted} deleted`;
+					container.addChild(new Text(theme.fg("dim", meta), 0, 0));
+				}
+				return container;
+			}
+
+			if (!isError && details) {
+				const meta = details.dry_run ? `${details.matched} matched (dry run)` : `${details.deleted} deleted`;
 				return new Text(`${theme.fg("success", "✓")} ${theme.fg("toolOutput", meta)}`, 0, 0);
 			}
 			return renderCollapsed(text, isError, theme);
