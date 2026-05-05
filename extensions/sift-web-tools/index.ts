@@ -1,10 +1,15 @@
-import { keyHint, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { createHash } from "node:crypto";
+import { chmod, mkdir, open, stat } from "node:fs/promises";
+import { basename, extname, join, parse } from "node:path";
+import { formatSize, keyHint, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { StringEnum } from "@mariozechner/pi-ai";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
 const SEARCH_HARD_CEILING = 30000;
 const SEARCH_PER_RESULT_BUDGET = 1600;
 const SIFT_TIMEOUT_SEC = 30;
+const ARTIFACT_DIR = "/tmp/sift-web-tools";
 
 const WebSearchParams = Type.Object({
 	query: Type.String({ description: "Search query" }),
@@ -30,6 +35,21 @@ const WebFetchParams = Type.Object({
 	),
 });
 
+const WebSaveParams = Type.Object({
+	url: Type.String({ description: "Absolute http(s) URL to fetch and save under /tmp/sift-web-tools/" }),
+	mode: Type.Optional(
+		StringEnum(["rendered", "raw"] as const, {
+			default: "rendered",
+			description:
+				"Save mode. rendered saves sift's extracted markdown/text for HTML/PDF/text/JSON/XML and downloads media; raw saves original response bytes.",
+		}),
+	),
+	filename: Type.Optional(
+		Type.String({ description: "Optional safe filename hint; path components are stripped and a URL hash is appended." }),
+	),
+	force: Type.Optional(Type.Boolean({ default: false, description: "Overwrite the selected output file if it exists." })),
+});
+
 interface SearchDetails {
 	query: string;
 	length: number;
@@ -45,6 +65,16 @@ interface FetchDetails {
 	final_url?: string;
 	title?: string;
 	status?: number;
+	kind?: string;
+}
+
+interface SaveDetails {
+	url: string;
+	path: string;
+	size: number;
+	mode: "rendered" | "raw";
+	source: "sift";
+	artifact_dir: string;
 	kind?: string;
 }
 
@@ -90,6 +120,8 @@ async function siftRun(pi: ExtensionAPI, args: string[], signal: AbortSignal | u
 			throw new Error(`transport error${tail}`);
 		case 4:
 			throw new Error("page requires JavaScript (SPA) — sift cannot render it");
+		case 5:
+			throw new Error(`output file exists${tail}`);
 		case 6:
 			throw new Error(`unsupported content type${tail}`);
 		default:
@@ -117,6 +149,114 @@ function truncate(text: string, max: number): { text: string; truncated: boolean
 
 function isLikelyHttpUrl(u: string): boolean {
 	return /^https?:\/\//i.test(u);
+}
+
+const MEDIA_EXTENSIONS = new Set([
+	".png",
+	".jpg",
+	".jpeg",
+	".gif",
+	".webp",
+	".svg",
+	".avif",
+	".bmp",
+	".ico",
+	".mp3",
+	".mp4",
+	".m4a",
+	".wav",
+	".webm",
+	".mov",
+	".ogg",
+]);
+const TEXT_EXTENSIONS = new Set([".md", ".txt", ".json", ".xml", ".csv", ".tsv", ".log", ".yaml", ".yml"]);
+const SAFE_RAW_EXTENSIONS = new Set([...MEDIA_EXTENSIONS, ...TEXT_EXTENSIONS, ".pdf", ".html", ".htm"]);
+
+async function ensureArtifactDir(): Promise<void> {
+	await mkdir(ARTIFACT_DIR, { recursive: true, mode: 0o700 });
+	await chmod(ARTIFACT_DIR, 0o700).catch(() => undefined);
+}
+
+function safeSlug(input: string, fallback = "download"): string {
+	const slug = input
+		.toLowerCase()
+		.replace(/\.[a-z0-9]{1,16}$/i, "")
+		.replace(/[^a-z0-9._-]+/g, "-")
+		.replace(/^-+|-+$/g, "")
+		.replace(/\.{2,}/g, ".")
+		.slice(0, 80);
+	return slug || fallback;
+}
+
+function urlPathParts(url: string): { stem: string; ext: string } {
+	try {
+		const parsedUrl = new URL(url);
+		const base = basename(parsedUrl.pathname) || parsedUrl.hostname || "download";
+		let ext = extname(base).toLowerCase();
+		const lowerBase = base.toLowerCase();
+		if (!ext && SAFE_RAW_EXTENSIONS.has(`.${lowerBase}`)) ext = `.${lowerBase}`;
+		return { stem: safeSlug(base), ext };
+	} catch {
+		return { stem: "download", ext: "" };
+	}
+}
+
+function pickArtifactExtension(urlExt: string, mode: "rendered" | "raw", filenameExt: string): string {
+	const requestedExt = filenameExt.toLowerCase();
+	if (requestedExt && /^\.[a-z0-9]{1,16}$/.test(requestedExt)) return requestedExt;
+	if (mode === "raw") return SAFE_RAW_EXTENSIONS.has(urlExt) ? urlExt : ".bin";
+	if (MEDIA_EXTENSIONS.has(urlExt) || TEXT_EXTENSIONS.has(urlExt)) return urlExt;
+	return ".md";
+}
+
+async function pathExists(path: string): Promise<boolean> {
+	try {
+		await stat(path);
+		return true;
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code === "ENOENT") return false;
+		throw err;
+	}
+}
+
+async function artifactPathFor(url: string, mode: "rendered" | "raw", filename: string | undefined, force: boolean): Promise<string> {
+	const urlParts = urlPathParts(url);
+	const fileBase = filename ? basename(filename) : "";
+	const parsedFile = fileBase ? parse(fileBase) : undefined;
+	const stem = safeSlug(parsedFile?.name || urlParts.stem);
+	const ext = pickArtifactExtension(urlParts.ext, mode, parsedFile?.ext || "");
+	const hash = createHash("sha256").update(url).digest("hex").slice(0, 8);
+	const basePath = join(ARTIFACT_DIR, `${stem}-${hash}${ext}`);
+	if (force || !(await pathExists(basePath))) return basePath;
+
+	for (let i = 2; i < 1000; i++) {
+		const candidate = join(ARTIFACT_DIR, `${stem}-${hash}-${i}${ext}`);
+		if (!(await pathExists(candidate))) return candidate;
+	}
+	throw new Error(`could not allocate an artifact path in ${ARTIFACT_DIR}`);
+}
+
+async function detectSavedKind(path: string): Promise<string> {
+	const handle = await open(path, "r");
+	try {
+		const head = Buffer.alloc(16);
+		const { bytesRead } = await handle.read(head, 0, head.length, 0);
+		const bytes = head.subarray(0, bytesRead);
+		if (bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "image/png";
+		if (bytes.subarray(0, 3).equals(Buffer.from([0xff, 0xd8, 0xff]))) return "image/jpeg";
+		if (bytes.subarray(0, 6).toString("ascii") === "GIF87a" || bytes.subarray(0, 6).toString("ascii") === "GIF89a") return "image/gif";
+		if (bytes.subarray(0, 4).toString("ascii") === "RIFF" && bytes.subarray(8, 12).toString("ascii") === "WEBP") return "image/webp";
+		if (bytes.subarray(0, 4).toString("ascii") === "%PDF") return "pdf";
+	} finally {
+		await handle.close();
+	}
+
+	const ext = extname(path).toLowerCase();
+	if (MEDIA_EXTENSIONS.has(ext)) return ext.slice(1);
+	if (ext === ".pdf") return "pdf";
+	if (TEXT_EXTENSIONS.has(ext)) return ext.slice(1);
+	if (ext === ".bin") return "binary";
+	return ext ? ext.slice(1) : "unknown";
 }
 
 type ThemeLike = { fg(name: string, text: string): string };
@@ -326,6 +466,115 @@ export default function (pi: ExtensionAPI) {
 				return container;
 			}
 
+			return renderCollapsed(text, isError, theme);
+		},
+	});
+
+	pi.registerTool({
+		name: "web_save",
+		label: "Web save",
+		description:
+			"Fetch a web URL with sift and save the result under /tmp/sift-web-tools/ instead of loading it all into context. Use for large pages, PDFs, images, media, or files that should be inspected later with read/grep/bash.",
+		promptSnippet:
+			"web_save(url) — fetch via sift and save to /tmp/sift-web-tools/ for later inspection with read/grep/bash.",
+		promptGuidelines: [
+			"Use web_save when web_fetch would be too large, when fetching PDFs, or when downloading images/files for later inspection.",
+			"After web_save returns a local path, use read with offset/limit, grep, or bash to inspect relevant parts instead of loading the whole file.",
+			"After web_save downloads an image, use read on the returned path to view it.",
+			"web_save only accepts http(s) URLs; file:// and other schemes are rejected.",
+		],
+		parameters: WebSaveParams,
+		executionMode: "parallel",
+
+		async execute(_toolCallId, params: Static<typeof WebSaveParams>, signal, onUpdate, _ctx) {
+			const url = params.url.trim();
+			const mode = params.mode ?? "rendered";
+			const force = params.force ?? false;
+
+			if (!isLikelyHttpUrl(url)) {
+				throw new Error(`web_save rejected non-http(s) URL: ${url}`);
+			}
+
+			try {
+				await ensureArtifactDir();
+				const outPath = await artifactPathFor(url, mode, params.filename, force);
+				onUpdate?.({
+					content: [{ type: "text", text: `Saving ${url} to ${outPath}...` }],
+					details: { url, path: outPath, size: 0, mode, source: "sift", artifact_dir: ARTIFACT_DIR } satisfies SaveDetails,
+				});
+
+				const args = ["fetch", url, "--out", outPath, "--timeout", String(SIFT_TIMEOUT_SEC)];
+				if (mode === "raw") args.splice(2, 0, "--raw");
+				if (force) args.push("--force");
+
+				await siftRun(pi, args, signal);
+				const saved = await stat(outPath);
+				const kind = await detectSavedKind(outPath);
+				const hint = kind.startsWith("image/") || MEDIA_EXTENSIONS.has(extname(outPath).toLowerCase())
+					? "Use read on this path to view the downloaded image/media if supported."
+					: "Use read with offset/limit, grep, or bash to inspect relevant parts of this file.";
+				const text = [
+					`Saved ${url}`,
+					`Path: ${outPath}`,
+					`Size: ${formatSize(saved.size)}`,
+					`Mode: ${mode}`,
+					`Hint: ${hint}`,
+				].join("\n");
+
+				return {
+					content: [{ type: "text", text }],
+					details: {
+						url,
+						path: outPath,
+						size: saved.size,
+						mode,
+						source: "sift",
+						artifact_dir: ARTIFACT_DIR,
+						kind,
+					} satisfies SaveDetails,
+				};
+			} catch (err) {
+				const msg = err instanceof Error ? err.message : String(err);
+				throw new Error(`web_save failed: ${msg}`);
+			}
+		},
+
+		renderCall(args, theme, _context) {
+			const u = typeof args.url === "string" ? args.url : "...";
+			const preview = u.length > 80 ? `${u.slice(0, 80)}...` : u;
+			const mode = typeof args.mode === "string" ? args.mode : "rendered";
+			return new Text(
+				theme.fg("toolTitle", theme.bold("web_save ")) +
+					theme.fg("accent", preview) +
+					theme.fg("muted", ` [${mode}]`),
+				0,
+				0,
+			);
+		},
+
+		renderResult(result, { expanded }, theme, context) {
+			const block = result.content[0];
+			const text = block?.type === "text" ? block.text : "(no output)";
+			const details = result.details as SaveDetails | undefined;
+			const isError = context.isError;
+
+			if (expanded) {
+				const container = new Container();
+				container.addChild(new Text(isError ? theme.fg("error", "✗ web_save") : theme.fg("success", "✓ web_save"), 0, 0));
+				if (details?.url) container.addChild(new Text(theme.fg("muted", details.url), 0, 0));
+				if (details?.path) container.addChild(new Text(theme.fg("accent", details.path), 0, 0));
+				container.addChild(new Text(text, 0, 0));
+				if (details && !isError) {
+					const meta = [formatSize(details.size), details.mode, details.kind].filter(Boolean).join(" · ");
+					container.addChild(new Text(theme.fg("dim", meta), 0, 0));
+				}
+				return container;
+			}
+
+			if (!isError && details?.path) {
+				const meta = `${details.path} · ${formatSize(details.size)} · ${details.mode}`;
+				return new Text(`${theme.fg("success", "✓")} ${theme.fg("toolOutput", meta)}`, 0, 0);
+			}
 			return renderCollapsed(text, isError, theme);
 		},
 	});

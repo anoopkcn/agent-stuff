@@ -1,13 +1,14 @@
 # sift-web-tools
 
-Adds two LLM-callable tools (`web_search`, `web_fetch`) that give pi local-first web access via the [`sift`](https://github.com/anoopkcn/sift) CLI.
+Adds three LLM-callable tools (`web_search`, `web_fetch`, `web_save`) that give pi local-first web access via the [`sift`](https://github.com/anoopkcn/sift) CLI.
 
 ## Tools
 
 - `web_search(query, max_results?)` — Runs `sift search <query> --json` (DuckDuckGo by default; SearXNG if configured) and renders the top results as a markdown list with titles, URLs, and snippets.
 - `web_fetch(url, max_chars?)` — Runs `sift fetch <url> --json` and returns the page's primary content as clean markdown, plus `title` / `final_url` / `status` / `kind` in the result details.
+- `web_save(url, mode?, filename?, force?)` — Runs `sift fetch <url> --out /tmp/sift-web-tools/...` and returns the saved local path instead of loading the content into context. Use it for large pages, PDFs, images, media, or files the agent should inspect later with `read`, `grep`, or `bash`. `mode` is `rendered` by default; `raw` saves original response bytes.
 
-To fetch multiple URLs, the agent issues parallel `web_fetch` tool calls in a single turn — sift instances run concurrently (one child process per URL).
+To fetch multiple URLs, the agent issues parallel `web_fetch` or `web_save` tool calls in a single turn — sift instances run concurrently (one child process per URL).
 
 Both tools are local: queries and URLs are not forwarded to any third-party API. The agent talks to a child `sift` process on your machine, which in turn uses `curl` for the actual HTTP request.
 
@@ -44,7 +45,9 @@ export SIFT_SEARXNG_URL="https://your-searxng.example/search" # Replace the URL 
 
 - `web_search` truncates the rendered list to roughly `max_results × 1600` chars (hard ceiling 30k) to keep the agent's context tidy.
 - `web_fetch` truncates to `max_chars` (default 20000, max 100000) and appends `[truncated, full length=N]` when cut.
-- `web_fetch` rejects non-`http(s)` schemes (`file://`, `data:`, etc.) before spawning sift.
+- `web_save` stores artifacts under `/tmp/sift-web-tools/` and returns only path/size/mode hints to keep context small.
+- `web_save` filenames are sanitized, path components are stripped, and an 8-char URL hash is appended to reduce collisions.
+- `web_fetch` and `web_save` reject non-`http(s)` schemes (`file://`, `data:`, etc.) before spawning sift.
 - A 30-second timeout is passed to sift via `--timeout`.
 - Execution uses pi's `pi.exec()` with the agent abort signal and an outer timeout; cancellation/timeout terminates the child process promptly.
 
@@ -54,6 +57,7 @@ Errors are thrown from the tool execution so pi marks the tool result as failed,
 
 - `transport error: ...` — exit 3 from sift (curl failed, HTTP 4xx/5xx, response > 50 MB).
 - `page requires JavaScript (SPA) — sift cannot render it` — exit 4. sift has no JS engine; report and move on rather than retrying.
+- `output file exists: ...` — exit 5 from sift if an output path collision still occurs.
 - `unsupported content type: ...` — exit 6 (e.g. PDF without `pdftotext` installed).
 - `sift returned invalid JSON ...` — sift emitted non-JSON in `--json` mode; the message includes a sample of the actual output for debugging.
 - `sift binary not found ...` — install sift or set `SIFT_BIN`.
