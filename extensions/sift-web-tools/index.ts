@@ -341,6 +341,38 @@ function formatArtifactsList(files: ArtifactInfo[], total: number): string {
 	return remaining > 0 ? `${text}\n\n[${remaining} more artifact(s); increase limit to show more.]` : text;
 }
 
+function parseLimitArg(args: string, defaultLimit: number): number {
+	const trimmed = args.trim();
+	const match = trimmed.match(/(?:^|\s)(?:limit=)?(\d+)(?:\s|$)/i);
+	if (!match) return defaultLimit;
+	const parsed = Number.parseInt(match[1], 10);
+	if (!Number.isFinite(parsed)) return defaultLimit;
+	return Math.max(1, Math.min(200, parsed));
+}
+
+function parseCleanArgs(args: string): { older_than_minutes: number; all: boolean; dry_run: boolean } {
+	const tokens = args.trim().split(/\s+/).filter(Boolean);
+	let olderThanMinutes = 1440;
+	let all = false;
+	let dryRun = false;
+
+	for (const token of tokens) {
+		const lower = token.toLowerCase();
+		if (lower === "all" || lower === "--all" || lower === "all=true") {
+			all = true;
+			continue;
+		}
+		if (lower === "dry" || lower === "dry-run" || lower === "--dry-run" || lower === "dry_run=true") {
+			dryRun = true;
+			continue;
+		}
+		const ageMatch = lower.match(/^(?:older_than_minutes=|older=|age=)?(\d+)$/);
+		if (ageMatch) olderThanMinutes = Number.parseInt(ageMatch[1], 10);
+	}
+
+	return { older_than_minutes: Math.max(0, olderThanMinutes), all, dry_run: dryRun };
+}
+
 type ThemeLike = { fg(name: string, text: string): string };
 
 function renderCollapsed(text: string, isError: boolean, theme: ThemeLike): Text {
@@ -364,7 +396,68 @@ function formatSearchResults(payload: SiftSearchJson): string {
 		.join("\n\n");
 }
 
+
 export default function (pi: ExtensionAPI) {
+	pi.registerMessageRenderer("sift-web-tools", (message, _options, theme) => {
+		const details = message.details as { title?: string; subtitle?: string; kind?: string } | undefined;
+		const container = new Container();
+		const title = details?.title ?? "sift-web-tools";
+		const subtitle = details?.subtitle ? ` ${theme.fg("dim", details.subtitle)}` : "";
+		container.addChild(new Text(theme.fg("accent", theme.bold(title)) + subtitle, 0, 0));
+		container.addChild(new Text(String(message.content), 0, 0));
+		return container;
+	});
+
+	async function showArtifactsCommand(args: string) {
+		const limit = parseLimitArg(args, 50);
+		const files = await listArtifacts();
+		const returned = files.slice(0, limit);
+		pi.sendMessage({
+			customType: "sift-web-tools",
+			content: formatArtifactsList(returned, files.length),
+			display: true,
+			details: { title: "web_artifacts", subtitle: `${returned.length}/${files.length} artifact(s)`, kind: "artifacts" },
+		});
+	}
+
+	pi.registerCommand("web_artifacts", {
+		description: "List saved web artifacts from /tmp/sift-web-tools/ (usage: /web_artifacts [limit])",
+		handler: async (args) => showArtifactsCommand(args),
+	});
+
+	pi.registerCommand("web_artifats", {
+		description: "Alias for /web_artifacts (typo-compatible). Usage: /web_artifats [limit]",
+		handler: async (args) => showArtifactsCommand(args),
+	});
+
+	pi.registerCommand("web_clean", {
+		description: "Delete saved web artifacts (usage: /web_clean [older_than_minutes|all] [dry-run])",
+		handler: async (args) => {
+			const { older_than_minutes, all, dry_run } = parseCleanArgs(args);
+			const cutoff = Date.now() - older_than_minutes * 60 * 1000;
+			const files = await listArtifacts();
+			const matched = files.filter((file) => all || file.modified < cutoff);
+			if (!dry_run) {
+				await Promise.all(matched.map((file) => unlink(file.path).catch(() => undefined)));
+			}
+
+			const action = dry_run ? "Would delete" : "Deleted";
+			const scope = all ? "all artifacts" : `artifacts older than ${older_than_minutes} minute(s)`;
+			const shown = matched.slice(0, 50);
+			const list = matched.length ? `\n\n${formatArtifactsList(shown, matched.length)}` : "";
+			pi.sendMessage({
+				customType: "sift-web-tools",
+				content: `${action} ${matched.length} ${scope} from ${ARTIFACT_DIR}.${list}`,
+				display: true,
+				details: {
+					title: "web_clean",
+					subtitle: dry_run ? `${matched.length} matched · dry run` : `${matched.length} deleted`,
+					kind: "clean",
+				},
+			});
+		},
+	});
+
 	pi.registerTool({
 		name: "web_search",
 		label: "Web search",
