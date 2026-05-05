@@ -276,6 +276,7 @@ export default function (pi: ExtensionAPI) {
 		promptSnippet: "web_fetch(url) — local page fetch via sift; returns primary content as markdown.",
 		promptGuidelines: [
 			"Use web_fetch to read a specific URL in full after web_search surfaces it.",
+			"When you have several URLs to read, emit multiple web_fetch calls in the SAME assistant turn — the runtime fans them out in parallel. Do not chain them across turns.",
 			"Only http(s) URLs are accepted; file:// and other schemes are rejected.",
 			"sift cannot render JavaScript-only SPAs — those return an error you should report rather than retry.",
 		],

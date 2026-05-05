@@ -7,6 +7,8 @@ Adds two LLM-callable tools (`web_search`, `web_fetch`) that give pi local-first
 - `web_search(query, max_results?)` — Runs `sift search <query> --json` (DuckDuckGo by default; SearXNG if configured) and renders the top results as a markdown list with titles, URLs, and snippets.
 - `web_fetch(url, max_chars?)` — Runs `sift fetch <url> --json` and returns the page's primary content as clean markdown, plus `title` / `final_url` / `status` / `kind` in the result details.
 
+To fetch multiple URLs, the agent issues parallel `web_fetch` tool calls in a single turn — sift instances run concurrently (one child process per URL).
+
 Both tools are local: queries and URLs are not forwarded to any third-party API. The agent talks to a child `sift` process on your machine, which in turn uses `curl` for the actual HTTP request.
 
 ## Prerequisites
