@@ -46,11 +46,11 @@ export SIFT_SEARXNG_URL="https://your-searxng.example/search" # Replace the URL 
 - `web_fetch` truncates to `max_chars` (default 20000, max 100000) and appends `[truncated, full length=N]` when cut.
 - `web_fetch` rejects non-`http(s)` schemes (`file://`, `data:`, etc.) before spawning sift.
 - A 30-second timeout is passed to sift via `--timeout`.
-- Cancellation via the agent's abort signal sends `SIGTERM` to sift, escalating to `SIGKILL` after a 2s grace window — Esc cleans up promptly.
+- Execution uses pi's `pi.exec()` with the agent abort signal and an outer timeout; cancellation/timeout terminates the child process promptly.
 
 ## Failure modes
 
-Errors are surfaced via `isError: true` and include sift's exit code context:
+Errors are thrown from the tool execution so pi marks the tool result as failed, with sift's exit code context included:
 
 - `transport error: ...` — exit 3 from sift (curl failed, HTTP 4xx/5xx, response > 50 MB).
 - `page requires JavaScript (SPA) — sift cannot render it` — exit 4. sift has no JS engine; report and move on rather than retrying.

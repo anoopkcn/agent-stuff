@@ -1,5 +1,4 @@
-import { spawn } from "node:child_process";
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import { keyHint, type ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { Container, Text } from "@mariozechner/pi-tui";
 import { type Static, Type } from "typebox";
 
@@ -64,52 +63,27 @@ interface SiftFetchJson {
 	fetched_at?: number;
 }
 
-async function siftRun(args: string[], signal: AbortSignal | undefined): Promise<string> {
+async function siftRun(pi: ExtensionAPI, args: string[], signal: AbortSignal | undefined): Promise<string> {
 	const bin = process.env.SIFT_BIN || "sift";
-	const proc = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"], shell: false });
-
-	let stdout = "";
-	let stderr = "";
-	proc.stdout.on("data", (chunk: Buffer) => {
-		stdout += chunk.toString("utf8");
-	});
-	proc.stderr.on("data", (chunk: Buffer) => {
-		stderr += chunk.toString("utf8");
+	const result = await pi.exec(bin, args, {
+		signal,
+		// Give sift's own --timeout a small grace period before pi kills the process.
+		timeout: (SIFT_TIMEOUT_SEC + 5) * 1000,
 	});
 
-	const onAbort = () => {
-		proc.kill("SIGTERM");
-		setTimeout(() => {
-			if (!proc.killed) proc.kill("SIGKILL");
-		}, 2000);
-	};
-	if (signal) {
-		if (signal.aborted) onAbort();
-		else signal.addEventListener("abort", onAbort, { once: true });
-	}
-
-	let exitCode: number;
-	try {
-		exitCode = await new Promise<number>((resolve, reject) => {
-			proc.on("error", reject);
-			proc.on("close", (code) => resolve(code ?? -1));
-		});
-	} catch (err) {
-		if ((err as NodeJS.ErrnoException)?.code === "ENOENT") {
-			throw new Error(
-				`sift binary not found (tried "${bin}"). Install from https://github.com/akc/sift or set SIFT_BIN to its full path.`,
-			);
-		}
-		throw err;
-	} finally {
-		signal?.removeEventListener("abort", onAbort);
-	}
-
+	if (result.code === 0) return result.stdout;
 	if (signal?.aborted) throw new Error("aborted");
-	if (exitCode === 0) return stdout;
+	if (result.killed) throw new Error(`sift timed out after ${SIFT_TIMEOUT_SEC} seconds`);
 
-	const tail = stderr.trim() ? `: ${stderr.trim().slice(0, 300)}` : "";
-	switch (exitCode) {
+	const stderr = result.stderr.trim();
+	if (result.code === 1 && !stderr) {
+		throw new Error(
+			`sift binary not found (tried "${bin}"). Install from https://github.com/akc/sift or set SIFT_BIN to its full path.`,
+		);
+	}
+
+	const tail = stderr ? `: ${stderr.slice(0, 300)}` : "";
+	switch (result.code) {
 		case 2:
 			throw new Error(`sift bad arguments${tail}`);
 		case 3:
@@ -119,7 +93,7 @@ async function siftRun(args: string[], signal: AbortSignal | undefined): Promise
 		case 6:
 			throw new Error(`unsupported content type${tail}`);
 		default:
-			throw new Error(`sift exited with code ${exitCode}${tail}`);
+			throw new Error(`sift exited with code ${result.code}${tail}`);
 	}
 }
 
@@ -150,7 +124,7 @@ type ThemeLike = { fg(name: string, text: string): string };
 function renderCollapsed(text: string, isError: boolean, theme: ThemeLike): Text {
 	const lines = text.split("\n");
 	const collapsed = lines.slice(0, 8).join("\n");
-	const more = lines.length > 8 ? `\n${theme.fg("muted", "(Ctrl+O to expand)")}` : "";
+	const more = lines.length > 8 ? `\n${theme.fg("muted", keyHint("app.tools.expand", "to expand"))}` : "";
 	const icon = isError ? theme.fg("error", "✗") : theme.fg("success", "✓");
 	return new Text(`${icon} ${theme.fg("toolOutput", collapsed)}${more}`, 0, 0);
 }
@@ -178,7 +152,7 @@ export default function (pi: ExtensionAPI) {
 			"web_search(query) — local web search via sift; returns top results as markdown with titles and URLs.",
 		promptGuidelines: [
 			"Use web_search for fresh, factual lookups; cite returned URLs verbatim.",
-			"On transient failure, retry once with a different phrasing or fall back to a narrower query.",
+			"On web_search transient failure, retry once with a different phrasing or fall back to a narrower query.",
 		],
 		parameters: WebSearchParams,
 		executionMode: "parallel",
@@ -186,16 +160,11 @@ export default function (pi: ExtensionAPI) {
 		async execute(_toolCallId, params: Static<typeof WebSearchParams>, signal, _onUpdate, _ctx) {
 			const query = params.query.trim();
 			const maxResults = params.max_results ?? 5;
-			if (!query) {
-				return {
-					content: [{ type: "text", text: "Empty query." }],
-					details: { query, length: 0, truncated: false, source: "sift" } satisfies SearchDetails,
-					isError: true,
-				};
-			}
+			if (!query) throw new Error("web_search failed: empty query");
 
 			try {
 				const stdout = await siftRun(
+					pi,
 					[
 						"search",
 						query,
@@ -222,18 +191,14 @@ export default function (pi: ExtensionAPI) {
 				};
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				return {
-					content: [{ type: "text", text: `web_search failed: ${msg}` }],
-					details: { query, length: 0, truncated: false, source: "sift" } satisfies SearchDetails,
-					isError: true,
-				};
+				throw new Error(`web_search failed: ${msg}`);
 			}
 		},
 
 		renderCall(args, theme, _context) {
-			const q = args.query ?? "...";
+			const q = typeof args.query === "string" ? args.query : "...";
 			const preview = q.length > 70 ? `${q.slice(0, 70)}...` : q;
-			const max = args.max_results ?? 5;
+			const max = typeof args.max_results === "number" ? args.max_results : 5;
 			return new Text(
 				theme.fg("toolTitle", theme.bold("web_search ")) +
 					theme.fg("accent", `"${preview}"`) +
@@ -277,8 +242,8 @@ export default function (pi: ExtensionAPI) {
 		promptGuidelines: [
 			"Use web_fetch to read a specific URL in full after web_search surfaces it.",
 			"When you have several URLs to read, emit multiple web_fetch calls in the SAME assistant turn — the runtime fans them out in parallel. Do not chain them across turns.",
-			"Only http(s) URLs are accepted; file:// and other schemes are rejected.",
-			"sift cannot render JavaScript-only SPAs — those return an error you should report rather than retry.",
+			"web_fetch only accepts http(s) URLs; file:// and other schemes are rejected.",
+			"web_fetch cannot render JavaScript-only SPAs via sift — those return an error you should report rather than retry.",
 		],
 		parameters: WebFetchParams,
 		executionMode: "parallel",
@@ -288,15 +253,12 @@ export default function (pi: ExtensionAPI) {
 			const maxChars = params.max_chars ?? 20000;
 
 			if (!isLikelyHttpUrl(url)) {
-				return {
-					content: [{ type: "text", text: `web_fetch rejected non-http(s) URL: ${url}` }],
-					details: { url, length: 0, truncated: false, source: "sift" } satisfies FetchDetails,
-					isError: true,
-				};
+				throw new Error(`web_fetch rejected non-http(s) URL: ${url}`);
 			}
 
 			try {
 				const stdout = await siftRun(
+					pi,
 					["fetch", url, "--json", "--timeout", String(SIFT_TIMEOUT_SEC)],
 					signal,
 				);
@@ -318,16 +280,12 @@ export default function (pi: ExtensionAPI) {
 				};
 			} catch (err) {
 				const msg = err instanceof Error ? err.message : String(err);
-				return {
-					content: [{ type: "text", text: `web_fetch failed: ${msg}` }],
-					details: { url, length: 0, truncated: false, source: "sift" } satisfies FetchDetails,
-					isError: true,
-				};
+				throw new Error(`web_fetch failed: ${msg}`);
 			}
 		},
 
 		renderCall(args, theme, _context) {
-			const u = args.url ?? "...";
+			const u = typeof args.url === "string" ? args.url : "...";
 			const preview = u.length > 80 ? `${u.slice(0, 80)}...` : u;
 			return new Text(
 				theme.fg("toolTitle", theme.bold("web_fetch ")) + theme.fg("accent", preview),
@@ -346,12 +304,14 @@ export default function (pi: ExtensionAPI) {
 				const container = new Container();
 				const header = isError ? theme.fg("error", "✗ web_fetch") : theme.fg("success", "✓ web_fetch");
 				container.addChild(new Text(header, 0, 0));
-				if (details) {
-					const target = details.final_url && details.final_url !== details.url
-						? `${details.url} → ${details.final_url}`
-						: details.url;
+				const inputUrl = typeof context.args.url === "string" ? context.args.url : undefined;
+				const detailsUrl = typeof details?.url === "string" ? details.url : undefined;
+				const url = detailsUrl ?? inputUrl;
+				if (url) {
+					const finalUrl = typeof details?.final_url === "string" ? details.final_url : undefined;
+					const target = finalUrl && finalUrl !== url ? `${url} → ${finalUrl}` : url;
 					container.addChild(new Text(theme.fg("muted", target), 0, 0));
-					if (details.title) {
+					if (!isError && details?.title) {
 						container.addChild(new Text(theme.fg("muted", details.title), 0, 0));
 					}
 				}
