@@ -1,6 +1,6 @@
 # sift-web-tools
 
-Adds two LLM-callable tools (`web_search`, `web_fetch`) that give pi local-first web access via the [`sift`](https://github.com/akc/sift) CLI.
+Adds two LLM-callable tools (`web_search`, `web_fetch`) that give pi local-first web access via the [`sift`](https://github.com/anoopkcn/sift) CLI.
 
 ## Tools
 
