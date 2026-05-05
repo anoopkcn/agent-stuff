@@ -11,22 +11,31 @@ Both tools are local: queries and URLs are not forwarded to any third-party API.
 
 ## Prerequisites
 
-- `sift` on `$PATH`. Build it from <https://github.com/anoopkcn/sift> (`zig build -Doptimize=ReleaseSafe`) and copy `zig-out/bin/sift` to `~/.local/bin/` or `/usr/local/bin/`.
-- `curl` (used by sift for transport).
-- `pdftotext` — optional, only required if you want `web_fetch` to handle PDFs.
+- `sift` CLI installed and available in the system's `$PATH`.
+- `curl` used by sift for transport.
+- `pdftotext`(optional) only required if you want `web_fetch` to handle PDFs.
 
+### Get pre-built binaries
+- [Get the latest release](https://github.com/anoopkcn/sift/releases)
+- Put the `sift` binary somewhere in your `$PATH` (e.g. `~/.local/bin/` or `/usr/local/bin/`).
+
+### Install from source
+- `git clone https://github.com/anoopkcn/sift` 
+- `zig build -Doptimize=ReleaseSafe`
+- and copy `zig-out/bin/sift` to `~/.local/bin/` or `/usr/local/bin/`.
+
+### Configuration
 To override the binary location, set `SIFT_BIN` to a full path:
 
 ```sh
 export SIFT_BIN="$HOME/.local/bin/sift" # or wherever you put it
 ```
 
-To use SearXNG instead of DuckDuckGo for search, set `sift`'s native env var:
+(Optional) To use SearXNG instead of DuckDuckGo for search, set `sift`'s native env var:
 
 ```sh
 export SIFT_SEARXNG_URL="https://your-searxng.example/search" # Replace the URL with your SearXNG instance's search endpoint
 ```
-
 (no extension change needed — sift reads it directly).
 
 ## Limits
